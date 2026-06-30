@@ -1,0 +1,301 @@
+IMPORTANT UPDATE REQUEST
+
+Apply the following modifications to the existing ERP/POS system without changing the current UI/UX design, branding, Arabic language support, or existing workflows.
+
+All new features must be fully integrated into the current architecture and all interfaces must remain in Arabic (RTL).
+
+=================================================
+
+1. ADVANCED ROLE & PERMISSION MANAGEMENT
+   =================================================
+
+Create a complete Role-Based Access Control (RBAC) system.
+
+The System Administrator must have the ability to:
+
+* Create new job roles dynamically.
+* Edit existing job roles.
+* Delete job roles.
+* Clone existing job roles.
+* Enable/Disable roles.
+* Assign roles to users.
+* Assign multiple roles to the same user if needed.
+
+Create a dedicated screen:
+
+"إدارة الأدوار والصلاحيات"
+
+Features:
+
+* Role List
+* Create Role
+* Edit Role
+* Delete Role
+* Permission Matrix
+* Search Roles
+* Filter Roles
+
+=================================================
+PERMISSION MATRIX
+=================
+
+The administrator must be able to control access for every module and every action separately.
+
+Permissions include:
+
+Dashboard
+POS
+Sales
+Purchases
+Inventory
+Customers
+Suppliers
+Reports
+Settings
+Users
+Branches
+Roles & Permissions
+
+For each module provide:
+
+* View
+* Create
+* Edit
+* Delete
+* Approve
+* Export
+* Print
+
+Display permissions as an easy-to-use matrix with checkboxes.
+
+Example:
+
+مدير المبيعات
+
+✓ عرض المبيعات
+✓ إنشاء فاتورة
+✓ تعديل فاتورة
+✗ حذف فاتورة
+✓ طباعة فاتورة
+✓ عرض التقارير
+
+etc.
+
+=================================================
+USER PERMISSION OVERRIDE
+========================
+
+The System Administrator must also be able to grant or revoke permissions directly to a specific user regardless of their role.
+
+Example:
+
+User belongs to:
+"موظف مبيعات"
+
+But Admin can manually add:
+
+✓ عرض التقارير
+
+without changing the role itself.
+
+=================================================
+AUDIT LOG
+=========
+
+Create an Audit Log module.
+
+Track:
+
+* Login
+* Logout
+* Role Changes
+* Permission Changes
+* User Creation
+* User Deletion
+* Branch Transfers
+* Inventory Adjustments
+
+Show:
+
+* User
+* Action
+* Date
+* Time
+* IP Address
+
+=================================================
+2. MULTI-BRANCH INVENTORY SYSTEM
+================================
+
+Convert the inventory system into a Multi-Branch ERP.
+
+Create 5 independent branches.
+
+Example:
+
+* الفرع الرئيسي
+* فرع 1
+* فرع 2
+* فرع 3
+* فرع 4
+
+The number of branches must be configurable.
+
+=================================================
+BRANCH ISOLATION
+================
+
+By default:
+
+Users can ONLY access their assigned branch.
+
+They must NOT see:
+
+* Inventory of other branches
+* Sales of other branches
+* Purchases of other branches
+* Customers of other branches
+* Reports of other branches
+* Financial information of other branches
+
+All branch data must be isolated.
+
+=================================================
+BRANCH ACCESS CONTROL
+=====================
+
+System Administrator can define:
+
+* Single Branch Access
+* Multiple Branch Access
+* All Branch Access
+
+Examples:
+
+Cashier → Branch 1 only
+
+Sales Manager → Branch 1 + Branch 2
+
+General Manager → All Branches
+
+=================================================
+INVENTORY BY BRANCH
+===================
+
+Each branch should have its own:
+
+* Stock Quantity
+* Purchase Records
+* Sales Records
+* Inventory Movements
+* Transfers
+
+Product catalog remains shared globally.
+
+Example:
+
+Dell Latitude 5540
+
+Branch 1 = 20 Units
+Branch 2 = 15 Units
+Branch 3 = 5 Units
+
+=================================================
+STOCK TRANSFER SYSTEM
+=====================
+
+Create:
+
+"تحويل مخزون بين الفروع"
+
+Features:
+
+* Source Branch
+* Destination Branch
+* Product
+* Quantity
+* Notes
+* Approval Status
+
+Statuses:
+
+* Pending
+* Approved
+* Rejected
+* Completed
+
+Inventory updates automatically after approval.
+
+=================================================
+BRANCH DASHBOARD
+================
+
+Users should only see KPIs related to their permitted branches.
+
+Examples:
+
+Sales
+Revenue
+Orders
+Inventory
+Reports
+
+must respect branch permissions.
+
+=================================================
+BRANCH FILTER
+=============
+
+For users who have access to multiple branches:
+
+Add branch selector at the top of the system.
+
+Options:
+
+* Current Branch
+* Multiple Branches
+* All Authorized Branches
+
+=================================================
+DATABASE REQUIREMENTS
+=====================
+
+Update database schema to include:
+
+Branches
+UserBranchAccess
+RolePermissions
+UserPermissions
+BranchInventory
+StockTransfers
+AuditLogs
+
+=================================================
+UI REQUIREMENTS
+===============
+
+Maintain the current modern design.
+
+All screens must remain:
+
+* Arabic
+* RTL
+* Responsive
+* Clean
+* Simple
+* User-Friendly
+
+Do NOT make the system more complicated.
+
+The goal is:
+Enterprise-level permissions and branch management with a simple user experience.
+
+Generate:
+
+1. Updated Database Schema
+2. Updated React Components
+3. Updated API Structure
+4. Updated User Flows
+5. Updated Permission Matrix UI
+6. Updated Multi-Branch Inventory Architecture
+7. Production-Ready React Code

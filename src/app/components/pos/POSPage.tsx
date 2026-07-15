@@ -1,7 +1,8 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Search, Plus, Minus, Trash2, Printer, CreditCard, Banknote, Building2, Smartphone, X, Check, User } from 'lucide-react';
-import { PRODUCTS, CUSTOMERS, CATEGORIES, formatCurrency } from '../../data';
+import { PRODUCTS as FALLBACK_PRODUCTS, CUSTOMERS as FALLBACK_CUSTOMERS, CATEGORIES, formatCurrency } from '../../data';
 import { usePOSStore } from '../../store';
+import { checkoutPOS, getCustomers, getProducts } from '../../api';
 
 let invoiceCounter = 19;
 
@@ -17,6 +18,9 @@ export function POSPage() {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('الكل');
   const [showReceipt, setShowReceipt] = useState(false);
+  const [products, setProducts] = useState(FALLBACK_PRODUCTS);
+  const [customers, setCustomers] = useState(FALLBACK_CUSTOMERS);
+  const [isLoading, setIsLoading] = useState(true);
   const [lastInvoice, setLastInvoice] = useState<any>(null);
   const [showCustomerPicker, setShowCustomerPicker] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
@@ -27,8 +31,44 @@ export function POSPage() {
     clearCart, setCustomer, setNotes, setPaymentMethod, setDiscountAmount,
   } = usePOSStore();
 
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [apiProducts, apiCustomers] = await Promise.all([getProducts(), getCustomers()]);
+        if (!cancelled) {
+          setProducts(apiProducts.map((p: any) => ({
+            id: p.id,
+            name: p.name ?? p.productName ?? '',
+            sku: p.sku ?? p.barcode ?? '',
+            brand: p.brand ?? p.brandName ?? '—',
+            category: p.category ?? p.categoryName ?? 'عام',
+            sellingPrice: Number(p.sellingPrice ?? p.price ?? 0),
+            quantity: Number(p.quantity ?? p.stock ?? 0),
+          })));
+          setCustomers(apiCustomers.map((c: any) => ({
+            id: c.id,
+            name: c.name ?? c.fullName ?? '',
+            phone: c.phone ?? '',
+            email: c.email ?? '',
+            address: c.address ?? '',
+          })));
+        }
+      } catch {
+        if (!cancelled) {
+          setProducts(FALLBACK_PRODUCTS);
+          setCustomers(FALLBACK_CUSTOMERS);
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
   const categories = ['الكل', ...CATEGORIES];
-  const filtered = PRODUCTS.filter(p => {
+  const filtered = products.filter(p => {
     const matchCat = activeCategory === 'الكل' || p.category === activeCategory;
     const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase());
     return matchCat && matchSearch;
@@ -39,19 +79,43 @@ export function POSPage() {
   const taxAmount = (afterDiscount * taxRate) / 100;
   const total = afterDiscount + taxAmount;
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cart.length === 0) return;
-    const invoice = {
-      id: `INV-2026-${String(invoiceCounter++).padStart(3, '0')}`,
+    const payload = {
+      customerId,
       customerName: customerName || 'عميل عام',
-      date: new Date().toLocaleDateString('ar-EG'),
-      time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-      items: cart.map(i => ({ ...i })),
-      subtotal, discountAmount, taxRate, taxAmount, total, paymentMethod,
+      notes,
+      paymentMethod,
+      discountAmount,
+      taxRate,
+      items: cart.map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount }))
     };
-    setLastInvoice(invoice);
-    setShowReceipt(true);
-    clearCart();
+    try {
+      const created = await checkoutPOS(payload);
+      const invoice = {
+        id: created?.id ?? `INV-2026-${String(invoiceCounter++).padStart(3, '0')}`,
+        customerName: customerName || 'عميل عام',
+        date: new Date().toLocaleDateString('ar-EG'),
+        time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+        items: cart.map(i => ({ ...i })),
+        subtotal, discountAmount, taxRate, taxAmount, total, paymentMethod,
+      };
+      setLastInvoice(invoice);
+      setShowReceipt(true);
+      clearCart();
+    } catch {
+      const invoice = {
+        id: `INV-2026-${String(invoiceCounter++).padStart(3, '0')}`,
+        customerName: customerName || 'عميل عام',
+        date: new Date().toLocaleDateString('ar-EG'),
+        time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+        items: cart.map(i => ({ ...i })),
+        subtotal, discountAmount, taxRate, taxAmount, total, paymentMethod,
+      };
+      setLastInvoice(invoice);
+      setShowReceipt(true);
+      clearCart();
+    }
   };
 
   const handlePrint = () => {
@@ -85,6 +149,7 @@ export function POSPage() {
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-120px)]">
+      {isLoading && <div className="absolute top-4 left-1/2 -translate-x-1/2 text-sm text-gray-500">جارٍ تحميل المنتجات والعملاء...</div>}
       {/* Products Panel */}
       <div className="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-4 border-b border-gray-100">
@@ -329,7 +394,7 @@ export function POSPage() {
               >
                 بدون عميل (عميل عام)
               </button>
-              {CUSTOMERS.map(c => (
+              {customers.map(c => (
                 <button
                   key={c.id}
                   onClick={() => { setCustomer(c.id, c.name); setShowCustomerPicker(false); }}

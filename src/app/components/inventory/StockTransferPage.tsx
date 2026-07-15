@@ -1,21 +1,53 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Search, X, Check, ArrowLeftRight, Filter, Building2 } from 'lucide-react';
 import {
   BRANCHES, STOCK_TRANSFERS, StockTransfer,
   TRANSFER_STATUS_LABELS, TRANSFER_STATUS_COLORS, getBranchStock, BRANCH_STOCKS
 } from '../../branchData';
-import { PRODUCTS, formatCurrency } from '../../data';
+import { PRODUCTS, formatCurrency, Product } from '../../data';
+import { createStockTransfer, getProducts, getStockTransfers } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
 
 let transferCounter = 5;
 
+const normalizeTransfer = (value: any): StockTransfer => ({
+  id: value?.id ?? value?.transferId ?? '',
+  fromBranchId: value?.fromBranchId ?? value?.sourceBranchId ?? '',
+  fromBranchName: value?.fromBranchName ?? value?.sourceBranchName ?? '',
+  toBranchId: value?.toBranchId ?? value?.destinationBranchId ?? '',
+  toBranchName: value?.toBranchName ?? value?.destinationBranchName ?? '',
+  productId: value?.productId ?? value?.product?.id ?? '',
+  productName: value?.productName ?? value?.product?.name ?? '',
+  quantity: Number(value?.quantity ?? 0),
+  notes: value?.notes ?? '',
+  status: value?.status === 'approved' ? 'approved' : value?.status === 'rejected' ? 'rejected' : value?.status === 'completed' ? 'completed' : 'pending',
+  requestedBy: value?.requestedBy ?? value?.requestedByName ?? 'مدير المخزون',
+  date: value?.date ?? value?.createdAt?.split('T')[0] ?? new Date().toISOString().split('T')[0],
+});
+
+const normalizeProduct = (value: any): Product => ({
+  id: value?.id ?? value?.productId ?? '',
+  name: value?.name ?? '',
+  sku: value?.sku ?? '',
+  barcode: value?.barcode ?? '',
+  brand: value?.brand ?? '',
+  category: value?.category ?? '',
+  costPrice: Number(value?.costPrice ?? value?.cost ?? 0),
+  sellingPrice: Number(value?.sellingPrice ?? value?.price ?? 0),
+  quantity: Number(value?.quantity ?? value?.stock ?? 0),
+  reorderLevel: Number(value?.reorderLevel ?? 0),
+});
+
 export function StockTransferPage() {
   const [transfers, setTransfers] = useState<StockTransfer[]>(STOCK_TRANSFERS);
   const [stocks, setStocks] = useState(BRANCH_STOCKS);
+  const [products, setProducts] = useState<Product[]>(PRODUCTS);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('الكل');
   const [showCreate, setShowCreate] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState('');
   const [form, setForm] = useState({
     fromBranchId: BRANCHES[0].id,
     toBranchId: BRANCHES[1].id,
@@ -24,38 +56,85 @@ export function StockTransferPage() {
     notes: '',
   });
 
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [apiTransfers, apiProducts] = await Promise.all([
+          getStockTransfers(),
+          getProducts(),
+        ]);
+        if (!cancelled) {
+          setTransfers(apiTransfers.map(normalizeTransfer));
+          setProducts(apiProducts.map(normalizeProduct));
+          setStatusMessage('');
+        }
+      } catch {
+        if (!cancelled) {
+          setTransfers(STOCK_TRANSFERS);
+          setProducts(PRODUCTS);
+          setStatusMessage('تم استخدام البيانات المحلية بسبب عدم توفر الخادم حالياً.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
   const filtered = transfers.filter(t => {
     if (filterStatus !== 'الكل' && TRANSFER_STATUS_LABELS[t.status] !== filterStatus) return false;
     if (search && !t.productName.includes(search) && !t.fromBranchName.includes(search) && !t.toBranchName.includes(search)) return false;
     return true;
   });
 
-  const selectedProduct = PRODUCTS.find(p => p.id === form.productId);
+  const selectedProduct = products.find(p => p.id === form.productId) ?? PRODUCTS.find(p => p.id === form.productId);
   const sourceStock = getBranchStock(form.fromBranchId, form.productId, stocks);
   const fromBranch = BRANCHES.find(b => b.id === form.fromBranchId);
   const toBranch = BRANCHES.find(b => b.id === form.toBranchId);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!form.productId || form.quantity <= 0 || form.fromBranchId === form.toBranchId) return;
     if (form.quantity > sourceStock) { alert('الكمية المطلوبة أكبر من المتوفر في الفرع المصدر'); return; }
 
-    const newTransfer: StockTransfer = {
-      id: `TR-2026-${String(transferCounter++).padStart(3, '0')}`,
+    const payload = {
       fromBranchId: form.fromBranchId,
-      fromBranchName: fromBranch?.name ?? '',
       toBranchId: form.toBranchId,
-      toBranchName: toBranch?.name ?? '',
       productId: form.productId,
-      productName: selectedProduct?.name ?? '',
       quantity: form.quantity,
       notes: form.notes,
       status: 'pending',
       requestedBy: 'أحمد الإداري',
       date: new Date().toISOString().split('T')[0],
     };
-    setTransfers(prev => [newTransfer, ...prev]);
-    setShowCreate(false);
-    setForm({ fromBranchId: BRANCHES[0].id, toBranchId: BRANCHES[1].id, productId: PRODUCTS[0].id, quantity: 1, notes: '' });
+    try {
+      const created = await createStockTransfer(payload);
+      const newTransfer = normalizeTransfer(created ?? { ...payload, id: `TR-2026-${String(transferCounter++).padStart(3, '0')}` });
+      setTransfers(prev => [newTransfer, ...prev]);
+      setShowCreate(false);
+      setForm({ fromBranchId: BRANCHES[0].id, toBranchId: BRANCHES[1].id, productId: products[0]?.id ?? PRODUCTS[0].id, quantity: 1, notes: '' });
+      setStatusMessage('تم إنشاء طلب التحويل بنجاح.');
+    } catch {
+      const fallbackTransfer: StockTransfer = {
+        id: `TR-2026-${String(transferCounter++).padStart(3, '0')}`,
+        fromBranchId: form.fromBranchId,
+        fromBranchName: fromBranch?.name ?? '',
+        toBranchId: form.toBranchId,
+        toBranchName: toBranch?.name ?? '',
+        productId: form.productId,
+        productName: selectedProduct?.name ?? '',
+        quantity: form.quantity,
+        notes: form.notes,
+        status: 'pending',
+        requestedBy: 'أحمد الإداري',
+        date: new Date().toISOString().split('T')[0],
+      };
+      setTransfers(prev => [fallbackTransfer, ...prev]);
+      setShowCreate(false);
+      setForm({ fromBranchId: BRANCHES[0].id, toBranchId: BRANCHES[1].id, productId: products[0]?.id ?? PRODUCTS[0].id, quantity: 1, notes: '' });
+      setStatusMessage('تم حفظ الطلب محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   const handleApprove = (transfer: StockTransfer) => {
@@ -82,6 +161,12 @@ export function StockTransferPage() {
 
   return (
     <div>
+      {statusMessage && (
+        <div className="mb-4 rounded-xl border border-purple-100 bg-purple-50 px-4 py-2 text-sm text-purple-700">{statusMessage}</div>
+      )}
+      {loading && (
+        <div className="mb-4 text-sm text-gray-500">جارٍ تحميل تحويلات المخزون...</div>
+      )}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">تحويل المخزون بين الفروع</h1>

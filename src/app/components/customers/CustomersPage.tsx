@@ -1,8 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Search, Edit2, Trash2, X, Eye, Phone, Mail, MapPin } from 'lucide-react';
 import { CUSTOMERS, SALES, Customer, formatCurrency } from '../../data';
+import { createCustomer, deleteCustomer, getCustomers, updateCustomer } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
+
+const normalizeCustomer = (value: any): Customer => ({
+  id: value?.id ?? value?.customerId ?? '',
+  name: value?.name ?? value?.fullName ?? '',
+  phone: value?.phone ?? '',
+  email: value?.email ?? '',
+  address: value?.address ?? '',
+  notes: value?.notes ?? '',
+  balance: Number(value?.balance ?? value?.credit ?? 0),
+  totalPurchases: Number(value?.totalPurchases ?? value?.totalSales ?? 0),
+  joinDate: value?.joinDate ?? value?.createdAt?.split('T')[0] ?? new Date().toISOString().split('T')[0],
+});
 
 export function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>(CUSTOMERS);
@@ -11,9 +24,33 @@ export function CustomersPage() {
   const [editing, setEditing] = useState<Customer | null>(null);
   const [form, setForm] = useState<Partial<Customer>>({});
   const [viewing, setViewing] = useState<Customer | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const apiCustomers = await getCustomers();
+        if (!cancelled) {
+          setCustomers(apiCustomers.map(normalizeCustomer));
+          setStatusMessage('');
+        }
+      } catch {
+        if (!cancelled) {
+          setCustomers(CUSTOMERS);
+          setStatusMessage('تم استخدام البيانات المحلية بسبب عدم توفر الخادم حالياً.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const filtered = customers.filter(c =>
-    !search || c.name.includes(search) || c.phone.includes(search) || c.email.includes(search)
+    !search || c.name.includes(search) || (c.phone || '').includes(search) || (c.email || '').includes(search)
   );
 
   const openAdd = () => {
@@ -28,28 +65,67 @@ export function CustomersPage() {
     setShowModal(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.name || !form.phone) return;
-    if (editing) {
-      setCustomers(cs => cs.map(c => c.id === editing.id ? { ...c, ...form } as Customer : c));
-    } else {
-      setCustomers(cs => [{
-        id: `c${Date.now()}`, name: form.name!, phone: form.phone!, email: form.email || '',
-        address: form.address || '', notes: form.notes || '', balance: 0, totalPurchases: 0,
-        joinDate: form.joinDate || new Date().toISOString().split('T')[0],
-      }, ...cs]);
+    const payload = {
+      name: form.name,
+      phone: form.phone,
+      email: form.email || '',
+      address: form.address || '',
+      notes: form.notes || '',
+      balance: form.balance ?? 0,
+      totalPurchases: form.totalPurchases ?? 0,
+      joinDate: form.joinDate || new Date().toISOString().split('T')[0],
+    };
+    try {
+      if (editing) {
+        const updated = await updateCustomer(editing.id, payload);
+        const normalized = normalizeCustomer(updated ?? { ...editing, ...payload });
+        setCustomers(cs => cs.map(c => c.id === editing.id ? normalized : c));
+      } else {
+        const created = await createCustomer(payload);
+        const normalized = normalizeCustomer(created ?? { ...payload, id: `c${Date.now()}` });
+        setCustomers(cs => [normalized, ...cs]);
+      }
+      setShowModal(false);
+      setStatusMessage('تم حفظ العميل بنجاح.');
+    } catch {
+      if (editing) {
+        setCustomers(cs => cs.map(c => c.id === editing.id ? { ...c, ...payload } as Customer : c));
+      } else {
+        setCustomers(cs => [{
+          id: `c${Date.now()}`, name: form.name!, phone: form.phone!, email: form.email || '',
+          address: form.address || '', notes: form.notes || '', balance: 0, totalPurchases: 0,
+          joinDate: form.joinDate || new Date().toISOString().split('T')[0],
+        }, ...cs]);
+      }
+      setShowModal(false);
+      setStatusMessage('تم حفظ العميل محلياً لأن الخادم غير متاح حالياً.');
     }
-    setShowModal(false);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('هل تريد حذف هذا العميل؟')) setCustomers(cs => cs.filter(c => c.id !== id));
+  const handleDelete = async (id: string) => {
+    if (!confirm('هل تريد حذف هذا العميل؟')) return;
+    try {
+      await deleteCustomer(id);
+      setCustomers(cs => cs.filter(c => c.id !== id));
+      setStatusMessage('تم حذف العميل بنجاح.');
+    } catch {
+      setCustomers(cs => cs.filter(c => c.id !== id));
+      setStatusMessage('تم حذف العميل محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   const getCustomerSales = (id: string) => SALES.filter(s => s.customerId === id);
 
   return (
     <div>
+      {statusMessage && (
+        <div className="mb-4 rounded-xl border border-purple-100 bg-purple-50 px-4 py-2 text-sm text-purple-700">{statusMessage}</div>
+      )}
+      {loading && (
+        <div className="mb-4 text-sm text-gray-500">جارٍ تحميل العملاء...</div>
+      )}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">إدارة العملاء</h1>

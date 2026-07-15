@@ -1,8 +1,28 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Search, RotateCcw, Trash2, X, AlertTriangle, Archive } from 'lucide-react';
 import { EXPENSES, Expense, EXPENSE_STATUS_LABELS, EXPENSE_STATUS_COLORS, EXPENSE_PAYMENT_LABELS, nowDatetime } from '../../expenseData';
 import { useAuthStore } from '../../store';
 import { formatCurrency } from '../../data';
+import { getExpenses, restoreExpense } from '../../api';
+
+const normalizeExpense = (value: any): Expense => ({
+  id: value?.id ?? '',
+  date: value?.date ?? value?.createdAt?.split('T')[0] ?? '2026-06-18',
+  branchId: value?.branchId ?? value?.branch?.id ?? '',
+  branchName: value?.branchName ?? value?.branch?.name ?? 'فرع رئيسي',
+  categoryId: value?.categoryId ?? value?.category?.id ?? '',
+  categoryName: value?.categoryName ?? value?.category?.name ?? 'أخرى',
+  description: value?.description ?? '',
+  amount: Number(value?.amount ?? value?.total ?? 0),
+  paymentMethod: (value?.paymentMethod ?? 'cash').toLowerCase(),
+  status: (value?.status ?? 'approved').toLowerCase(),
+  notes: value?.notes ?? '',
+  createdBy: value?.createdBy ?? value?.createdByName ?? 'مستخدم',
+  isArchived: Boolean(value?.isArchived),
+  deletedBy: value?.deletedBy,
+  deletedAt: value?.deletedAt,
+  deletionReason: value?.deletionReason,
+});
 
 export function ExpenseArchivePage() {
   const { user } = useAuthStore();
@@ -10,6 +30,25 @@ export function ExpenseArchivePage() {
   const [search, setSearch] = useState('');
   const [showConfirm, setShowConfirm] = useState<Expense | null>(null);
   const [toast, setToast] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const apiExpenses = await getExpenses({ archived: true });
+        if (!cancelled) {
+          setExpenses(apiExpenses.map(normalizeExpense));
+        }
+      } catch {
+        if (!cancelled) setExpenses(EXPENSES);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
@@ -17,12 +56,21 @@ export function ExpenseArchivePage() {
     !search || e.description.includes(search) || e.id.includes(search) || e.branchName.includes(search)
   );
 
-  const handleRestore = (id: string) => {
-    setExpenses(prev => prev.map(e => e.id === id ? {
-      ...e, isArchived: false,
-      deletedBy: undefined, deletedAt: undefined, deletionReason: undefined,
-    } : e));
-    showToast('✅ تم استعادة المصروف بنجاح.');
+  const handleRestore = async (id: string) => {
+    try {
+      await restoreExpense(id);
+      setExpenses(prev => prev.map(e => e.id === id ? {
+        ...e, isArchived: false,
+        deletedBy: undefined, deletedAt: undefined, deletionReason: undefined,
+      } : e));
+      showToast('✅ تم استعادة المصروف بنجاح.');
+    } catch {
+      setExpenses(prev => prev.map(e => e.id === id ? {
+        ...e, isArchived: false,
+        deletedBy: undefined, deletedAt: undefined, deletionReason: undefined,
+      } : e));
+      showToast('✅ تم استعادة المصروف محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   const handlePermanentDelete = (id: string) => {
@@ -38,6 +86,8 @@ export function ExpenseArchivePage() {
           {toast}
         </div>
       )}
+
+      {isLoading && <div className="mb-4 text-sm text-gray-500">جارٍ تحميل الأرشيف...</div>}
 
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div className="flex items-center gap-3">

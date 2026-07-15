@@ -1,8 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Search, Edit2, Trash2, X, Phone, Mail, MapPin } from 'lucide-react';
 import { SUPPLIERS, Supplier } from '../../data';
+import { createSupplier, deleteSupplier, getSuppliers, updateSupplier } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
+
+const normalizeSupplier = (value: any): Supplier => ({
+  id: value?.id ?? value?.supplierId ?? '',
+  name: value?.name ?? value?.companyName ?? '',
+  phone: value?.phone ?? '',
+  email: value?.email ?? '',
+  address: value?.address ?? '',
+  notes: value?.notes ?? '',
+  totalOrders: Number(value?.totalOrders ?? value?.ordersCount ?? 0),
+});
 
 export function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>(SUPPLIERS);
@@ -10,9 +21,33 @@ export function SuppliersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [form, setForm] = useState<Partial<Supplier>>({});
+  const [loading, setLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const apiSuppliers = await getSuppliers();
+        if (!cancelled) {
+          setSuppliers(apiSuppliers.map(normalizeSupplier));
+          setStatusMessage('');
+        }
+      } catch {
+        if (!cancelled) {
+          setSuppliers(SUPPLIERS);
+          setStatusMessage('تم استخدام البيانات المحلية بسبب عدم توفر الخادم حالياً.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const filtered = suppliers.filter(s =>
-    !search || s.name.includes(search) || s.phone.includes(search) || s.email.includes(search)
+    !search || s.name.includes(search) || (s.phone || '').includes(search) || (s.email || '').includes(search)
   );
 
   const openAdd = () => {
@@ -27,25 +62,62 @@ export function SuppliersPage() {
     setShowModal(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.name || !form.phone) return;
-    if (editing) {
-      setSuppliers(ss => ss.map(s => s.id === editing.id ? { ...s, ...form } as Supplier : s));
-    } else {
-      setSuppliers(ss => [{
-        id: `s${Date.now()}`, name: form.name!, phone: form.phone!, email: form.email || '',
-        address: form.address || '', notes: form.notes || '', totalOrders: 0,
-      }, ...ss]);
+    const payload = {
+      name: form.name,
+      phone: form.phone,
+      email: form.email || '',
+      address: form.address || '',
+      notes: form.notes || '',
+      totalOrders: form.totalOrders ?? 0,
+    };
+    try {
+      if (editing) {
+        const updated = await updateSupplier(editing.id, payload);
+        const normalized = normalizeSupplier(updated ?? { ...editing, ...payload });
+        setSuppliers(ss => ss.map(s => s.id === editing.id ? normalized : s));
+      } else {
+        const created = await createSupplier(payload);
+        const normalized = normalizeSupplier(created ?? { ...payload, id: `s${Date.now()}` });
+        setSuppliers(ss => [normalized, ...ss]);
+      }
+      setShowModal(false);
+      setStatusMessage('تم حفظ المورد بنجاح.');
+    } catch {
+      if (editing) {
+        setSuppliers(ss => ss.map(s => s.id === editing.id ? { ...s, ...payload } as Supplier : s));
+      } else {
+        setSuppliers(ss => [{
+          id: `s${Date.now()}`, name: form.name!, phone: form.phone!, email: form.email || '',
+          address: form.address || '', notes: form.notes || '', totalOrders: 0,
+        }, ...ss]);
+      }
+      setShowModal(false);
+      setStatusMessage('تم حفظ المورد محلياً لأن الخادم غير متاح حالياً.');
     }
-    setShowModal(false);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('هل تريد حذف هذا المورد؟')) setSuppliers(ss => ss.filter(s => s.id !== id));
+  const handleDelete = async (id: string) => {
+    if (!confirm('هل تريد حذف هذا المورد؟')) return;
+    try {
+      await deleteSupplier(id);
+      setSuppliers(ss => ss.filter(s => s.id !== id));
+      setStatusMessage('تم حذف المورد بنجاح.');
+    } catch {
+      setSuppliers(ss => ss.filter(s => s.id !== id));
+      setStatusMessage('تم حذف المورد محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   return (
     <div>
+      {statusMessage && (
+        <div className="mb-4 rounded-xl border border-purple-100 bg-purple-50 px-4 py-2 text-sm text-purple-700">{statusMessage}</div>
+      )}
+      {loading && (
+        <div className="mb-4 text-sm text-gray-500">جارٍ تحميل الموردين...</div>
+      )}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">إدارة الموردين</h1>

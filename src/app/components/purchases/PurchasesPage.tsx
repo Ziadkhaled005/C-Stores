@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Search, Printer, Eye, X, Check, ShoppingBag, FileText } from 'lucide-react';
-import { PURCHASES, SUPPLIERS, PRODUCTS, Purchase, PurchaseItem, formatCurrency, STATUS_LABELS } from '../../data';
+import { PURCHASES, SUPPLIERS, PRODUCTS, Purchase, PurchaseItem, formatCurrency, STATUS_LABELS, Supplier, Product } from '../../data';
+import { createPurchase, getProducts, getPurchases, getSuppliers, updatePurchaseStatus } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
 
@@ -13,8 +14,54 @@ const STATUS_COLORS: Record<string, string> = {
 
 let purchaseCounter = 13;
 
+const normalizePurchase = (value: any): Purchase => ({
+  id: value?.id ?? value?.purchaseId ?? '',
+  type: value?.type === 'invoice' ? 'invoice' : 'order',
+  supplierId: value?.supplierId ?? value?.supplier?.id ?? '',
+  supplierName: value?.supplierName ?? value?.supplier?.name ?? value?.supplier?.companyName ?? '',
+  date: value?.date ?? value?.createdAt?.split('T')[0] ?? new Date().toISOString().split('T')[0],
+  items: Array.isArray(value?.items) ? value.items.map((item: any) => ({
+    productId: item?.productId ?? item?.product?.id ?? '',
+    productName: item?.productName ?? item?.product?.name ?? '',
+    sku: item?.sku ?? item?.product?.sku ?? '',
+    quantity: Number(item?.quantity ?? 1),
+    unitCost: Number(item?.unitCost ?? item?.costPrice ?? item?.price ?? 0),
+    total: Number(item?.total ?? (Number(item?.quantity ?? 1) * Number(item?.unitCost ?? item?.costPrice ?? item?.price ?? 0))),
+  })) : [],
+  subtotal: Number(value?.subtotal ?? value?.amount ?? 0),
+  taxAmount: Number(value?.taxAmount ?? 0),
+  total: Number(value?.total ?? value?.amount ?? 0),
+  status: value?.status === 'received' ? 'received' : value?.status === 'partial' ? 'partial' : value?.status === 'cancelled' ? 'cancelled' : 'pending',
+  notes: value?.notes ?? '',
+});
+
+const normalizeSupplier = (value: any): Supplier => ({
+  id: value?.id ?? value?.supplierId ?? '',
+  name: value?.name ?? value?.companyName ?? '',
+  phone: value?.phone ?? '',
+  email: value?.email ?? '',
+  address: value?.address ?? '',
+  notes: value?.notes ?? '',
+  totalOrders: Number(value?.totalOrders ?? value?.ordersCount ?? 0),
+});
+
+const normalizeProduct = (value: any): Product => ({
+  id: value?.id ?? value?.productId ?? '',
+  name: value?.name ?? '',
+  sku: value?.sku ?? '',
+  barcode: value?.barcode ?? '',
+  brand: value?.brand ?? '',
+  category: value?.category ?? '',
+  costPrice: Number(value?.costPrice ?? value?.cost ?? 0),
+  sellingPrice: Number(value?.sellingPrice ?? value?.price ?? 0),
+  quantity: Number(value?.quantity ?? value?.stock ?? 0),
+  reorderLevel: Number(value?.reorderLevel ?? 0),
+});
+
 export function PurchasesPage() {
   const [purchases, setPurchases] = useState<Purchase[]>(PURCHASES);
+  const [suppliers, setSuppliers] = useState<Supplier[]>(SUPPLIERS);
+  const [products, setProducts] = useState<Product[]>(PRODUCTS);
   const [tab, setTab] = useState<'order' | 'invoice'>('order');
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -22,11 +69,43 @@ export function PurchasesPage() {
   const [createType, setCreateType] = useState<'order' | 'invoice'>('order');
   const [form, setForm] = useState({ supplierId: '', notes: '', taxRate: 14 });
   const [items, setItems] = useState<PurchaseItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [apiPurchases, apiSuppliers, apiProducts] = await Promise.all([
+          getPurchases(),
+          getSuppliers(),
+          getProducts(),
+        ]);
+        if (!cancelled) {
+          setPurchases(apiPurchases.map(normalizePurchase));
+          setSuppliers(apiSuppliers.map(normalizeSupplier));
+          setProducts(apiProducts.map(normalizeProduct));
+          setStatusMessage('');
+        }
+      } catch {
+        if (!cancelled) {
+          setPurchases(PURCHASES);
+          setSuppliers(SUPPLIERS);
+          setProducts(PRODUCTS);
+          setStatusMessage('تم استخدام البيانات المحلية بسبب عدم توفر الخادم حالياً.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const filtered = purchases.filter(p => p.type === tab && (!search || p.supplierName.includes(search) || p.id.includes(search)));
 
   const addItem = () => {
-    const p = PRODUCTS[0];
+    const p = products[0] ?? PRODUCTS[0];
     setItems(prev => [...prev, { productId: p.id, productName: p.name, sku: p.sku, quantity: 1, unitCost: p.costPrice, total: p.costPrice }]);
   };
 
@@ -35,7 +114,7 @@ export function PurchasesPage() {
       const next = [...prev];
       const item = { ...next[i], [field]: value };
       if (field === 'productId') {
-        const p = PRODUCTS.find(p => p.id === value);
+        const p = products.find(p => p.id === value) ?? PRODUCTS.find(p => p.id === value);
         if (p) { item.productName = p.name; item.sku = p.sku; item.unitCost = p.costPrice; }
       }
       item.total = item.quantity * item.unitCost;
@@ -50,27 +129,57 @@ export function PurchasesPage() {
   const taxAmount = (subtotal * form.taxRate) / 100;
   const total = subtotal + taxAmount;
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!form.supplierId || items.length === 0) return;
-    const supplier = SUPPLIERS.find(s => s.id === form.supplierId);
+    const supplier = suppliers.find(s => s.id === form.supplierId);
     const prefix = createType === 'order' ? 'PO' : 'PI';
-    const newPurchase: Purchase = {
-      id: `${prefix}-2026-${String(purchaseCounter++).padStart(3, '0')}`,
+    const payload = {
       type: createType,
       supplierId: form.supplierId,
       supplierName: supplier?.name || '',
       date: new Date().toISOString().split('T')[0],
-      items,
+      items: items.map(i => ({
+        productId: i.productId,
+        productName: i.productName,
+        sku: i.sku,
+        quantity: i.quantity,
+        unitCost: i.unitCost,
+        total: i.total,
+      })),
       subtotal,
       taxAmount,
       total,
       status: createType === 'order' ? 'pending' : 'received',
       notes: form.notes,
     };
-    setPurchases(prev => [newPurchase, ...prev]);
-    setShowCreate(false);
-    setItems([]);
-    setForm({ supplierId: '', notes: '', taxRate: 14 });
+    try {
+      const created = await createPurchase(payload);
+      const newPurchase = normalizePurchase(created ?? payload);
+      setPurchases(prev => [newPurchase, ...prev]);
+      setShowCreate(false);
+      setItems([]);
+      setForm({ supplierId: '', notes: '', taxRate: 14 });
+      setStatusMessage('تم إنشاء الطلب بنجاح.');
+    } catch {
+      const fallbackPurchase: Purchase = {
+        id: `${prefix}-2026-${String(purchaseCounter++).padStart(3, '0')}`,
+        type: createType,
+        supplierId: form.supplierId,
+        supplierName: supplier?.name || '',
+        date: new Date().toISOString().split('T')[0],
+        items,
+        subtotal,
+        taxAmount,
+        total,
+        status: createType === 'order' ? 'pending' : 'received',
+        notes: form.notes,
+      };
+      setPurchases(prev => [fallbackPurchase, ...prev]);
+      setShowCreate(false);
+      setItems([]);
+      setForm({ supplierId: '', notes: '', taxRate: 14 });
+      setStatusMessage('تم حفظ الطلب محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   const handlePrint = (p: Purchase) => {
@@ -104,12 +213,23 @@ export function PurchasesPage() {
     setTimeout(() => { win.print(); win.close(); }, 500);
   };
 
-  const updateStatus = (id: string, status: Purchase['status']) => {
+  const updateStatus = async (id: string, status: Purchase['status']) => {
     setPurchases(prev => prev.map(p => p.id === id ? { ...p, status } : p));
+    try {
+      await updatePurchaseStatus(id, status);
+    } catch {
+      setStatusMessage('تم تحديث الحالة محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   return (
     <div>
+      {statusMessage && (
+        <div className="mb-4 rounded-xl border border-purple-100 bg-purple-50 px-4 py-2 text-sm text-purple-700">{statusMessage}</div>
+      )}
+      {loading && (
+        <div className="mb-4 text-sm text-gray-500">جارٍ تحميل المشتريات...</div>
+      )}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">المشتريات</h1>
@@ -226,7 +346,7 @@ export function PurchasesPage() {
                   <label className="block text-sm font-semibold text-gray-600 mb-1.5">المورد *</label>
                   <select value={form.supplierId} onChange={e => setForm(f => ({ ...f, supplierId: e.target.value }))} className={inputCls}>
                     <option value="">اختر مورد</option>
-                    {SUPPLIERS.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -246,7 +366,7 @@ export function PurchasesPage() {
                     {items.map((item, i) => (
                       <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-xl p-2">
                         <select value={item.productId} onChange={e => updateItem(i, 'productId', e.target.value)} className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none">
-                          {PRODUCTS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                         </select>
                         <input type="number" value={item.quantity} min={1} onChange={e => updateItem(i, 'quantity', Number(e.target.value))} className="w-14 text-center text-xs border border-gray-200 rounded-lg py-1.5" placeholder="كمية" />
                         <input type="number" value={item.unitCost} min={0} onChange={e => updateItem(i, 'unitCost', Number(e.target.value))} className="w-28 text-center text-xs border border-gray-200 rounded-lg py-1.5" placeholder="التكلفة" />

@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { TrendingDown, DollarSign, Wallet, ArrowUpRight, ArrowDownRight, Printer } from 'lucide-react';
 import {
   EXPENSES, MONTHLY_EXPENSE_TREND, getTodayExpenses, getMonthExpenses,
   expenseTotal, getCategoryBreakdown, getBranchBreakdown, EXPENSE_PAYMENT_LABELS
 } from '../../expenseData';
 import { SALES, REVENUE_DATA, formatCurrency } from '../../data';
+import { getExpenses, getSales, getCashflow } from '../../api';
 import { useBranchStore } from '../../store';
 import { BRANCHES } from '../../branchData';
 import { SimpleBarChart } from '../ui/SimpleBarChart';
@@ -16,35 +17,90 @@ const COMPARE_DATA = REVENUE_DATA.map((r, i) => ({
   المصروفات: MONTHLY_EXPENSE_TREND[i]?.amount ?? 0,
 }));
 
+const normalizeExpense = (value: any) => ({
+  id: value?.id ?? '',
+  date: value?.date ?? value?.createdAt?.split('T')[0] ?? '2026-06-18',
+  branchId: value?.branchId ?? value?.branch?.id ?? '',
+  branchName: value?.branchName ?? value?.branch?.name ?? 'فرع رئيسي',
+  categoryId: value?.categoryId ?? value?.category?.id ?? '',
+  categoryName: value?.categoryName ?? value?.category?.name ?? 'أخرى',
+  description: value?.description ?? '',
+  amount: Number(value?.amount ?? value?.total ?? 0),
+  paymentMethod: (value?.paymentMethod ?? 'cash').toLowerCase(),
+  status: (value?.status ?? 'approved').toLowerCase(),
+  notes: value?.notes ?? '',
+  createdBy: value?.createdBy ?? value?.createdByName ?? 'مستخدم',
+  isArchived: Boolean(value?.isArchived),
+});
+
+const normalizeSale = (value: any) => ({
+  id: value?.id ?? '',
+  date: value?.date ?? value?.createdAt?.split('T')[0] ?? '2026-06-18',
+  status: (value?.status ?? 'paid').toLowerCase(),
+  total: Number(value?.total ?? value?.amount ?? 0),
+  items: Array.isArray(value?.items) ? value.items : [],
+  customerName: value?.customerName ?? value?.customer?.name ?? '',
+});
+
 export function CashFlowPage() {
   const { currentBranch } = useBranchStore();
   const [selectedDate, setSelectedDate] = useState('2026-06-18');
   const [filterBranch, setFilterBranch] = useState('الكل');
+  const [expensesData, setExpensesData] = useState(EXPENSES);
+  const [salesData, setSalesData] = useState(SALES);
+  const [isLoading, setIsLoading] = useState(true);
 
   const branchFilter = filterBranch === 'الكل' ? undefined : BRANCHES.find(b => b.name === filterBranch)?.id;
 
-  const todayExpList  = getTodayExpenses(EXPENSES, branchFilter);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [apiExpenses, apiSales, cashflowData] = await Promise.all([
+          getExpenses({ branchId: branchFilter, status: 'approved' }),
+          getSales({ branchId: branchFilter, status: 'paid' }),
+          getCashflow(selectedDate, branchFilter),
+        ]);
+        if (!cancelled) {
+          setExpensesData(apiExpenses.map(normalizeExpense));
+          setSalesData(apiSales.map(normalizeSale));
+        }
+      } catch {
+        if (!cancelled) {
+          setExpensesData(EXPENSES);
+          setSalesData(SALES);
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [branchFilter, selectedDate]);
+
+  const todayExpList  = getTodayExpenses(expensesData, branchFilter);
   const todayExpTotal = expenseTotal(todayExpList);
 
-  const todaySales = SALES.filter(s => s.date === '2026-06-18' && s.status === 'paid');
+  const todaySales = salesData.filter(s => (s.date ?? '').split('T')[0] === selectedDate && s.status === 'paid');
   const todaySalesTotal = todaySales.reduce((s, sale) => s + sale.total, 0);
 
   const todayReturns = 0;
   const netDailyRevenue = todaySalesTotal - todayExpTotal - todayReturns;
-  const monthExpList = getMonthExpenses(EXPENSES, branchFilter);
+  const monthExpList = getMonthExpenses(expensesData, branchFilter);
   const monthExpTotal = expenseTotal(monthExpList);
 
-  const monthSalesTotal = REVENUE_DATA[5].revenue;
+  const monthSalesTotal = salesData
+    .filter(s => (s.date ?? '').split('T')[0].slice(0, 7) === selectedDate.slice(0, 7))
+    .reduce((s, sale) => s + sale.total, 0);
   const monthProfit = monthSalesTotal - monthExpTotal;
 
-  // Expense breakdown by payment method for today
   const paymentBreakdown = Object.entries(EXPENSE_PAYMENT_LABELS).map(([key, label]) => ({
     name: label,
     value: todayExpList.filter(e => e.paymentMethod === key).reduce((s, e) => s + e.amount, 0),
   })).filter(p => p.value > 0);
 
   const categoryBreakdown = getCategoryBreakdown(monthExpList).slice(0, 6);
-  const branchBreakdown   = getBranchBreakdown(getMonthExpenses(EXPENSES));
+  const branchBreakdown   = getBranchBreakdown(getMonthExpenses(expensesData));
 
   const handlePrint = () => {
     const win = window.open('', '_blank');
@@ -79,6 +135,7 @@ export function CashFlowPage() {
 
   return (
     <div>
+      {isLoading && <div className="mb-4 text-sm text-gray-500">جارٍ تحميل التدفقات النقدية...</div>}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">الخزنة اليومية</h1>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Plus, Search, Edit2, Trash2, X, Eye, Printer, Check,
   Lock, RotateCcw, Archive, Tag
@@ -12,10 +12,39 @@ import {
 import { BRANCHES } from '../../branchData';
 import { useBranchStore, useAuthStore } from '../../store';
 import { formatCurrency } from '../../data';
+import { approveExpense, archiveExpense, createExpense, getExpenseCategories, getExpenses, rejectExpense } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
 
 let expenseCounter = 21;
+
+const normalizeExpense = (value: any): Expense => ({
+  id: value?.id ?? '',
+  date: value?.date ?? value?.createdAt?.split('T')[0] ?? '2026-06-18',
+  branchId: value?.branchId ?? value?.branch?.id ?? '',
+  branchName: value?.branchName ?? value?.branch?.name ?? '',
+  categoryId: value?.categoryId ?? value?.category?.id ?? '',
+  categoryName: value?.categoryName ?? value?.category?.name ?? '',
+  description: value?.description ?? '',
+  amount: Number(value?.amount ?? value?.total ?? 0),
+  paymentMethod: (value?.paymentMethod ?? 'cash').toLowerCase(),
+  status: (value?.status ?? 'pending').toLowerCase(),
+  notes: value?.notes ?? '',
+  createdBy: value?.createdBy ?? value?.createdByName ?? 'مستخدم',
+  approvedBy: value?.approvedBy,
+  approvedAt: value?.approvedAt,
+  approvalNotes: value?.approvalNotes,
+  rejectedBy: value?.rejectedBy,
+  rejectedAt: value?.rejectedAt,
+  rejectionReason: value?.rejectionReason,
+  cancelledBy: value?.cancelledBy,
+  cancelledAt: value?.cancelledAt,
+  cancellationReason: value?.cancellationReason,
+  isArchived: Boolean(value?.isArchived),
+  deletedBy: value?.deletedBy,
+  deletedAt: value?.deletedAt,
+  deletionReason: value?.deletionReason,
+});
 
 const STATUS_DOT: Record<ExpenseStatus, string> = {
   pending:  '🟡',
@@ -61,6 +90,32 @@ export function ExpensesPage() {
   const [showCatModal, setShowCatModal] = useState(false);
   const [editCat,      setEditCat]      = useState<ExpenseCategory | null>(null);
   const [catForm,      setCatForm]      = useState({ name: '', icon: '📦' });
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [apiExpenses, apiCategories] = await Promise.all([
+          getExpenses(),
+          getExpenseCategories(),
+        ]);
+        if (!cancelled) {
+          setExpenses(apiExpenses.map(normalizeExpense));
+          setCategories(apiCategories.map((c: any) => ({ id: c.id, name: c.name, icon: c.icon ?? '📦', isActive: c.isActive ?? true })));
+        }
+      } catch {
+        if (!cancelled) {
+          setExpenses(EXPENSES);
+          setCategories(EXPENSE_CATEGORIES);
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -108,7 +163,7 @@ export function ExpensesPage() {
     setShowExpModal(true);
   };
 
-  const handleSaveExpense = () => {
+  const handleSaveExpense = async () => {
     if (!form.description || !form.amount || !form.categoryId) return;
     const amount = Number(form.amount);
     if (editExpense) {
@@ -117,49 +172,100 @@ export function ExpensesPage() {
     } else {
       const cat    = categories.find(c => c.id === form.categoryId);
       const branch = BRANCHES.find(b => b.id === form.branchId);
-      const newExp: Expense = {
-        id: `EXP-2026-${String(expenseCounter++).padStart(3, '0')}`,
+      const payload = {
         date: form.date ?? '2026-06-18',
         branchId: form.branchId ?? currentBranch.id,
-        branchName: branch?.name ?? currentBranch.name,
-        categoryId: form.categoryId!, categoryName: cat?.name ?? '',
-        description: form.description!, amount,
+        categoryId: form.categoryId!,
+        description: form.description!,
+        amount,
         paymentMethod: form.paymentMethod as ExpensePayment ?? 'cash',
-        status: 'pending', // Always starts pending
         notes: form.notes ?? '',
-        createdBy: user?.name ?? 'مستخدم',
-        isArchived: false,
       };
-      setExpenses(prev => [newExp, ...prev]);
-      showToast('تم إضافة المصروف. الحالة: قيد الانتظار.');
+      try {
+        const created = await createExpense(payload);
+        const newExp: Expense = {
+          id: created?.id ?? `EXP-2026-${String(expenseCounter++).padStart(3, '0')}`,
+          date: created?.date ?? payload.date,
+          branchId: created?.branchId ?? payload.branchId,
+          branchName: branch?.name ?? currentBranch.name,
+          categoryId: created?.categoryId ?? payload.categoryId,
+          categoryName: created?.categoryName ?? cat?.name ?? '',
+          description: created?.description ?? payload.description,
+          amount: Number(created?.amount ?? payload.amount),
+          paymentMethod: (created?.paymentMethod ?? payload.paymentMethod).toLowerCase(),
+          status: created?.status ?? 'pending',
+          notes: created?.notes ?? payload.notes,
+          createdBy: created?.createdBy ?? user?.name ?? 'مستخدم',
+          isArchived: false,
+        };
+        setExpenses(prev => [newExp, ...prev]);
+        showToast('تم إضافة المصروف. الحالة: قيد الانتظار.');
+      } catch {
+        const newExp: Expense = {
+          id: `EXP-2026-${String(expenseCounter++).padStart(3, '0')}`,
+          date: form.date ?? '2026-06-18',
+          branchId: form.branchId ?? currentBranch.id,
+          branchName: branch?.name ?? currentBranch.name,
+          categoryId: form.categoryId!, categoryName: cat?.name ?? '',
+          description: form.description!, amount,
+          paymentMethod: form.paymentMethod as ExpensePayment ?? 'cash',
+          status: 'pending',
+          notes: form.notes ?? '',
+          createdBy: user?.name ?? 'مستخدم',
+          isArchived: false,
+        };
+        setExpenses(prev => [newExp, ...prev]);
+        showToast('تم إضافة المصروف محلياً لأن الخادم غير متاح حالياً.');
+      }
     }
     setShowExpModal(false);
   };
 
   // ── Approve ──
   const openApprove = (e: Expense) => { setTargetExp(e); setActionNotes(''); setActionError(''); setModalType('approve'); };
-  const handleApprove = () => {
+  const handleApprove = async () => {
     if (!targetExp) return;
-    setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
-      ...e, status: 'approved', approvedBy: user?.name ?? 'مدير النظام',
-      approvedAt: nowDatetime(), approvalNotes: actionNotes,
-      rejectedBy: undefined, rejectedAt: undefined, rejectionReason: undefined,
-    } : e));
-    setModalType(null);
-    showToast('✅ تم اعتماد المصروف بنجاح.');
+    try {
+      await approveExpense(targetExp.id, actionNotes);
+      setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
+        ...e, status: 'approved', approvedBy: user?.name ?? 'مدير النظام',
+        approvedAt: nowDatetime(), approvalNotes: actionNotes,
+        rejectedBy: undefined, rejectedAt: undefined, rejectionReason: undefined,
+      } : e));
+      setModalType(null);
+      showToast('✅ تم اعتماد المصروف بنجاح.');
+    } catch {
+      setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
+        ...e, status: 'approved', approvedBy: user?.name ?? 'مدير النظام',
+        approvedAt: nowDatetime(), approvalNotes: actionNotes,
+        rejectedBy: undefined, rejectedAt: undefined, rejectionReason: undefined,
+      } : e));
+      setModalType(null);
+      showToast('✅ تم اعتماد المصروف محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   // ── Reject ──
   const openReject = (e: Expense) => { setTargetExp(e); setActionNotes(''); setActionError(''); setModalType('reject'); };
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!actionNotes.trim()) { setActionError('سبب الرفض إلزامي.'); return; }
     if (!targetExp) return;
-    setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
-      ...e, status: 'rejected', rejectedBy: user?.name ?? 'مدير النظام',
-      rejectedAt: nowDatetime(), rejectionReason: actionNotes,
-    } : e));
-    setModalType(null);
-    showToast('❌ تم رفض المصروف.');
+    try {
+      await rejectExpense(targetExp.id, actionNotes);
+      setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
+        ...e, status: 'rejected', rejectedBy: user?.name ?? 'مدير النظام',
+        rejectedAt: nowDatetime(), rejectionReason: actionNotes,
+      } : e));
+      setModalType(null);
+      showToast('❌ تم رفض المصروف.');
+    } catch {
+      setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
+        ...e, status: 'rejected', rejectedBy: user?.name ?? 'مدير النظام',
+        rejectedAt: nowDatetime(), rejectionReason: actionNotes,
+      } : e));
+      setModalType(null);
+      showToast('❌ تم رفض المصروف محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   // ── Cancel Approval ──
@@ -181,15 +287,25 @@ export function ExpensesPage() {
     if (e.status === 'approved') { alert('لا يمكن حذف هذا المصروف لأنه تم اعتماده. يجب أولًا إلغاء الاعتماد.'); return; }
     setTargetExp(e); setActionNotes(''); setActionError(''); setModalType('delete');
   };
-  const handleSoftDelete = () => {
+  const handleSoftDelete = async () => {
     if (!actionNotes.trim()) { setActionError('سبب الحذف إلزامي.'); return; }
     if (!targetExp) return;
-    setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
-      ...e, isArchived: true,
-      deletedBy: user?.name ?? 'مستخدم', deletedAt: nowDatetime(), deletionReason: actionNotes,
-    } : e));
-    setModalType(null);
-    showToast('تم أرشفة المصروف.');
+    try {
+      await archiveExpense(targetExp.id, actionNotes);
+      setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
+        ...e, isArchived: true,
+        deletedBy: user?.name ?? 'مستخدم', deletedAt: nowDatetime(), deletionReason: actionNotes,
+      } : e));
+      setModalType(null);
+      showToast('تم أرشفة المصروف.');
+    } catch {
+      setExpenses(prev => prev.map(e => e.id === targetExp.id ? {
+        ...e, isArchived: true,
+        deletedBy: user?.name ?? 'مستخدم', deletedAt: nowDatetime(), deletionReason: actionNotes,
+      } : e));
+      setModalType(null);
+      showToast('تم أرشفة المصروف محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   // ── Print ──
@@ -254,6 +370,8 @@ export function ExpensesPage() {
           {toast}
         </div>
       )}
+
+      {isLoading && <div className="mb-4 text-sm text-gray-500">جارٍ تحميل المصروفات...</div>}
 
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>

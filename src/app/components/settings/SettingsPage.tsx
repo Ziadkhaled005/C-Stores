@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Building2, Receipt, Users, Shield, Save, Plus, Trash2, X, Edit2, ExternalLink, MapPin, Phone } from 'lucide-react';
 import { USERS, ROLE_LABELS, User, Role } from '../../data';
 import { BRANCHES, Branch } from '../../branchData';
 import { useNavigate } from 'react-router';
+import { createUser, deleteUser, getBranches, getSettingsCompany, getSettingsTax, getUsers, updateUser } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
 
 export function SettingsPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState('company');
+  const [isLoading, setIsLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const [users, setUsers] = useState<User[]>(USERS);
   const [branches, setBranches] = useState<Branch[]>(BRANCHES);
@@ -44,6 +46,35 @@ export function SettingsPage() {
     notes: 'يُرجى الاحتفاظ بالفاتورة لضمان حق الاسترجاع',
   });
 
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [companySettings, taxSettingsRes, apiBranches, apiUsers] = await Promise.all([
+          getSettingsCompany(),
+          getSettingsTax(),
+          getBranches(),
+          getUsers(),
+        ]);
+        if (!cancelled) {
+          setCompany(prev => ({ ...prev, ...companySettings }));
+          setTaxSettings(prev => ({ ...prev, ...taxSettingsRes }));
+          setBranches(apiBranches.map((b: any) => ({ id: b.id, name: b.name, code: b.code ?? b.name.slice(0,3).toUpperCase(), address: b.address ?? '', phone: b.phone ?? '', manager: b.manager ?? '', isActive: b.isActive ?? true, isMain: b.isMain ?? false })));
+          setUsers(apiUsers.map((u: any) => ({ id: u.id, name: u.fullName ?? u.name ?? '', email: u.email ?? '', role: (u.role ?? 'cashier') as Role, password: u.password ?? '123456', phone: u.phone ?? '', avatar: u.avatar ?? '', branchId: u.branchId ?? null }))));
+        }
+      } catch {
+        if (!cancelled) {
+          setBranches(BRANCHES);
+          setUsers(USERS);
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
   const handleSave = () => {
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -61,21 +92,65 @@ export function SettingsPage() {
     setShowUserModal(true);
   };
 
-  const handleSaveUser = () => {
+  const handleSaveUser = async () => {
     if (!userForm.name || !userForm.email) return;
-    if (editingUser) {
-      setUsers(us => us.map(u => u.id === editingUser.id ? { ...u, ...userForm } as User : u));
-    } else {
-      setUsers(us => [...us, {
-        id: `u${Date.now()}`, name: userForm.name!, email: userForm.email!, role: userForm.role as Role || 'cashier',
-        password: userForm.password || '123456', phone: userForm.phone || '',
-      }]);
+    const payload = {
+      fullName: userForm.name,
+      email: userForm.email,
+      phone: userForm.phone ?? '',
+      role: userForm.role,
+      password: userForm.password ?? '123456',
+    };
+    try {
+      if (editingUser) {
+        const updated = await updateUser(editingUser.id, payload);
+        const normalized = {
+          id: updated?.id ?? editingUser.id,
+          name: updated?.fullName ?? updated?.name ?? userForm.name!,
+          email: updated?.email ?? userForm.email!,
+          role: (updated?.role ?? userForm.role ?? 'cashier') as Role,
+          password: updated?.password ?? userForm.password ?? '123456',
+          phone: updated?.phone ?? userForm.phone ?? '',
+          avatar: updated?.avatarUrl ?? '',
+          branchId: updated?.branchId ?? null,
+        };
+        setUsers(us => us.map(u => u.id === editingUser.id ? normalized : u));
+      } else {
+        const created = await createUser(payload);
+        const normalized = {
+          id: created?.id ?? `u${Date.now()}`,
+          name: created?.fullName ?? created?.name ?? userForm.name!,
+          email: created?.email ?? userForm.email!,
+          role: (created?.role ?? userForm.role ?? 'cashier') as Role,
+          password: created?.password ?? userForm.password ?? '123456',
+          phone: created?.phone ?? userForm.phone ?? '',
+          avatar: created?.avatarUrl ?? '',
+          branchId: created?.branchId ?? null,
+        };
+        setUsers(us => [...us, normalized]);
+      }
+      setShowUserModal(false);
+    } catch {
+      if (editingUser) {
+        setUsers(us => us.map(u => u.id === editingUser.id ? { ...u, ...userForm } as User : u));
+      } else {
+        setUsers(us => [...us, {
+          id: `u${Date.now()}`, name: userForm.name!, email: userForm.email!, role: userForm.role as Role || 'cashier',
+          password: userForm.password || '123456', phone: userForm.phone || '',
+        }]);
+      }
+      setShowUserModal(false);
     }
-    setShowUserModal(false);
   };
 
-  const deleteUser = (id: string) => {
-    if (confirm('هل تريد حذف هذا المستخدم؟')) setUsers(us => us.filter(u => u.id !== id));
+  const deleteUser = async (id: string) => {
+    if (!confirm('هل تريد حذف هذا المستخدم؟')) return;
+    try {
+      await deleteUser(id);
+      setUsers(us => us.filter(u => u.id !== id));
+    } catch {
+      setUsers(us => us.filter(u => u.id !== id));
+    }
   };
 
   const TABS = [
@@ -96,6 +171,7 @@ export function SettingsPage() {
 
   return (
     <div>
+      {isLoading && <div className="mb-4 text-sm text-gray-500">جارٍ تحميل الإعدادات...</div>}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">الإعدادات</h1>

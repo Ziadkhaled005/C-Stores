@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Search, Edit2, Trash2, X, Copy, ToggleLeft, ToggleRight, Shield, Check } from 'lucide-react';
 import {
   AppRole, DEFAULT_ROLES, ALL_MODULES, ALL_PERMISSIONS,
   MODULE_LABELS, PERMISSION_LABELS, PermissionMap, Permission, Module, buildMatrix
 } from '../../rbacData';
+import { createRole, getRoles, toggleRoleActive, updateRolePermissions } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
 
@@ -13,10 +14,38 @@ export function RolesPage() {
   const [roles, setRoles] = useState<AppRole[]>(DEFAULT_ROLES);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [showMatrix, setShowMatrix] = useState<AppRole | null>(null);
   const [editingRole, setEditingRole] = useState<AppRole | null>(null);
   const [form, setForm] = useState({ name: '', description: '', color: ROLE_COLORS[0] });
   const [matrixEdit, setMatrixEdit] = useState<PermissionMap | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const apiRoles = await getRoles();
+        if (!cancelled) {
+          setRoles(apiRoles.map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            description: r.description ?? '',
+            color: r.color ?? ROLE_COLORS[0],
+            isSystem: Boolean(r.isSystem),
+            isActive: r.isActive ?? true,
+            userCount: r.userCount ?? 0,
+            permissions: r.permissions ?? buildMatrix({}),
+          })));
+        }
+      } catch {
+        if (!cancelled) setRoles(DEFAULT_ROLES);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const filtered = roles.filter(r =>
     !search || r.name.includes(search) || r.description.includes(search)
@@ -53,31 +82,59 @@ export function RolesPage() {
     setRoles(prev => [...prev, cloned]);
   };
 
-  const handleToggle = (id: string) => {
-    setRoles(prev => prev.map(r => r.id === id ? { ...r, isActive: !r.isActive } : r));
+  const handleToggle = async (id: string) => {
+    const role = roles.find(r => r.id === id);
+    if (!role) return;
+    try {
+      await toggleRoleActive(id, !role.isActive);
+      setRoles(prev => prev.map(r => r.id === id ? { ...r, isActive: !r.isActive } : r));
+    } catch {
+      setRoles(prev => prev.map(r => r.id === id ? { ...r, isActive: !r.isActive } : r));
+    }
   };
 
   const handleDelete = (id: string) => {
     if (confirm('هل تريد حذف هذا الدور؟')) setRoles(prev => prev.filter(r => r.id !== id));
   };
 
-  const handleSaveRole = () => {
+  const handleSaveRole = async () => {
     if (!form.name) return;
-    if (editingRole) {
-      setRoles(prev => prev.map(r =>
-        r.id === editingRole.id
-          ? { ...r, name: form.name, description: form.description, color: form.color, permissions: matrixEdit ?? r.permissions }
-          : r
-      ));
-    } else {
-      const newRole: AppRole = {
-        id: `r${Date.now()}`, name: form.name, description: form.description,
-        color: form.color, isSystem: false, isActive: true, userCount: 0,
-        permissions: matrixEdit ?? buildMatrix({}),
-      };
-      setRoles(prev => [...prev, newRole]);
+    const permissions = matrixEdit ?? buildMatrix({});
+    try {
+      if (editingRole) {
+        await updateRolePermissions(editingRole.id, permissions);
+        setRoles(prev => prev.map(r =>
+          r.id === editingRole.id
+            ? { ...r, name: form.name, description: form.description, color: form.color, permissions }
+            : r
+        ));
+      } else {
+        const created = await createRole({ name: form.name, description: form.description, color: form.color, permissions });
+        const newRole: AppRole = {
+          id: created?.id ?? `r${Date.now()}`, name: created?.name ?? form.name, description: created?.description ?? form.description,
+          color: created?.color ?? form.color, isSystem: false, isActive: true, userCount: 0,
+          permissions: created?.permissions ?? permissions,
+        };
+        setRoles(prev => [...prev, newRole]);
+      }
+      setShowModal(false);
+    } catch {
+      if (editingRole) {
+        setRoles(prev => prev.map(r =>
+          r.id === editingRole.id
+            ? { ...r, name: form.name, description: form.description, color: form.color, permissions }
+            : r
+        ));
+      } else {
+        const newRole: AppRole = {
+          id: `r${Date.now()}`, name: form.name, description: form.description,
+          color: form.color, isSystem: false, isActive: true, userCount: 0,
+          permissions,
+        };
+        setRoles(prev => [...prev, newRole]);
+      }
+      setShowModal(false);
     }
-    setShowModal(false);
   };
 
   const handleSaveMatrix = () => {
@@ -120,6 +177,7 @@ export function RolesPage() {
 
   return (
     <div>
+      {isLoading && <div className="mb-4 text-sm text-gray-500">جارٍ تحميل الأدوار...</div>}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">إدارة الأدوار والصلاحيات</h1>

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, FileText, TrendingUp, Package, Users, BarChart3, Receipt } from 'lucide-react';
 import { SALES, PRODUCTS, CUSTOMERS, REVENUE_DATA, formatCurrency } from '../../data';
 import { EXPENSES, getMonthExpenses, getCategoryBreakdown, getBranchBreakdown, expenseTotal, MONTHLY_EXPENSE_TREND, EXPENSE_STATUS_LABELS, EXPENSE_STATUS_COLORS, EXPENSE_PAYMENT_LABELS } from '../../expenseData';
+import { getCustomers, getExpenses, getProducts, getSales } from '../../api';
 import type { ExpenseStatus } from '../../expenseData';
 import { SimpleBarChart } from '../ui/SimpleBarChart';
 import { SimplePieChart } from '../ui/SimplePieChart';
@@ -22,18 +23,54 @@ const topCustomersData = CUSTOMERS.slice(0, 5).map(c => ({
 
 export function ReportsPage() {
   const [reportType, setReportType] = useState('sales');
+  const [salesData, setSalesData] = useState(SALES);
+  const [productsData, setProductsData] = useState(PRODUCTS);
+  const [customersData, setCustomersData] = useState(CUSTOMERS);
+  const [expensesData, setExpensesData] = useState(EXPENSES);
+  const [isLoading, setIsLoading] = useState(true);
   const [period, setPeriod] = useState('monthly');
   const [dateFrom, setDateFrom] = useState('2026-01-01');
   const [dateTo, setDateTo] = useState('2026-06-18');
 
-  const totalRevenue  = REVENUE_DATA.reduce((s, r) => s + r.revenue, 0);
-  const totalProfit   = REVENUE_DATA.reduce((s, r) => s + r.profit, 0);
-  const totalOrders   = REVENUE_DATA.reduce((s, r) => s + r.orders, 0);
-  const profitMargin  = ((totalProfit / totalRevenue) * 100).toFixed(1);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [apiSales, apiProducts, apiCustomers, apiExpenses] = await Promise.all([
+          getSales(),
+          getProducts(),
+          getCustomers(),
+          getExpenses(),
+        ]);
+        if (!cancelled) {
+          setSalesData(apiSales);
+          setProductsData(apiProducts);
+          setCustomersData(apiCustomers);
+          setExpensesData(apiExpenses);
+        }
+      } catch {
+        if (!cancelled) {
+          setSalesData(SALES);
+          setProductsData(PRODUCTS);
+          setCustomersData(CUSTOMERS);
+          setExpensesData(EXPENSES);
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
-  const totalExpenses = expenseTotal(EXPENSES.filter(e => e.status === 'approved'));
-  const catBreakdown  = getCategoryBreakdown(EXPENSES.filter(e => e.status === 'approved')).slice(0, 8);
-  const branchBreakdown = getBranchBreakdown(EXPENSES.filter(e => e.status === 'approved'));
+  const totalRevenue  = salesData.reduce((s, r: any) => s + Number(r.total ?? 0), 0);
+  const totalProfit   = salesData.reduce((s, r: any) => s + (Number(r.total ?? 0) - (Array.isArray(r.items) ? r.items.reduce((sum: number, item: any) => sum + (Number(item.unitPrice ?? 0) * Number(item.quantity ?? 0)), 0) : 0)), 0);
+  const totalOrders   = salesData.filter((s: any) => s.status === 'paid').length;
+  const profitMargin  = totalRevenue > 0 ? ((totalProfit / totalRevenue) * 100).toFixed(1) : '0.0';
+
+  const totalExpenses = expenseTotal(expensesData.filter((e: any) => e.status === 'approved'));
+  const catBreakdown  = getCategoryBreakdown(expensesData.filter((e: any) => e.status === 'approved')).slice(0, 8);
+  const branchBreakdown = getBranchBreakdown(expensesData.filter((e: any) => e.status === 'approved'));
 
   const handleExport = () => alert('سيتم تنزيل التقرير كملف PDF');
 
@@ -47,6 +84,7 @@ export function ReportsPage() {
 
   return (
     <div>
+      {isLoading && <div className="mb-4 text-sm text-gray-500">جارٍ تحميل التقارير...</div>}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">التقارير</h1>
@@ -154,10 +192,10 @@ export function ReportsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {SALES.filter(s => s.status === 'paid').map(s => {
-                    const cost = s.items.reduce((sum, i) => {
-                      const p = PRODUCTS.find(p => p.id === i.productId);
-                      return sum + (p?.costPrice || 0) * i.quantity;
+                  {salesData.filter((s: any) => s.status === 'paid').map((s: any) => {
+                    const cost = (s.items || []).reduce((sum: number, i: any) => {
+                      const p = productsData.find((p: any) => p.id === i.productId);
+                      return sum + (p?.costPrice || 0) * (i.quantity || 0);
                     }, 0);
                     return (
                       <tr key={s.id} className="hover:bg-gray-50">
@@ -207,7 +245,7 @@ export function ReportsPage() {
                   ))}</tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {PRODUCTS.slice(0, 10).map(p => {
+                  {productsData.slice(0, 10).map((p: any) => {
                     const margin = (((p.sellingPrice - p.costPrice) / p.sellingPrice) * 100).toFixed(1);
                     return (
                       <tr key={p.id} className="hover:bg-gray-50">

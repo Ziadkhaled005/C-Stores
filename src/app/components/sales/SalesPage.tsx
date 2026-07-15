@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Search, Printer, Download, Eye, X, Check, FileText, ShoppingBag, FileCheck } from 'lucide-react';
-import { SALES, CUSTOMERS, PRODUCTS, Sale, SaleItem, formatCurrency, PAYMENT_LABELS, STATUS_LABELS } from '../../data';
+import { SALES, CUSTOMERS, PRODUCTS, Sale, SaleItem, formatCurrency, PAYMENT_LABELS, STATUS_LABELS, Customer, Product } from '../../data';
+import { createSale, getCustomers, getProducts, getSales } from '../../api';
 
 const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#7C3AED] bg-gray-50';
 
@@ -13,8 +14,93 @@ const STATUS_COLORS: Record<string, string> = {
 
 let saleCounter = 20;
 
+const normalizePaymentMethod = (value?: string): Sale['paymentMethod'] => {
+  switch (value?.toLowerCase()) {
+    case 'visa':
+    case 'credit':
+      return 'visa';
+    case 'transfer':
+    case 'bank':
+      return 'transfer';
+    case 'instapay':
+      return 'instapay';
+    default:
+      return 'cash';
+  }
+};
+
+const normalizeStatus = (value?: string): Sale['status'] => {
+  switch (value?.toLowerCase()) {
+    case 'paid':
+    case 'completed':
+      return 'paid';
+    case 'pending':
+    case 'in_progress':
+      return 'pending';
+    case 'draft':
+      return 'draft';
+    case 'cancelled':
+    case 'canceled':
+      return 'cancelled';
+    default:
+      return 'draft';
+  }
+};
+
+const normalizeSale = (value: any): Sale => ({
+  id: value?.id ?? value?.saleId ?? value?.invoiceNumber ?? '',
+  type: (value?.type ?? 'invoice').toLowerCase() === 'order' ? 'order' : (value?.type ?? 'invoice').toLowerCase() === 'quotation' ? 'quotation' : 'invoice',
+  customerId: value?.customerId ?? value?.customer?.id ?? '',
+  customerName: value?.customerName ?? value?.customer?.name ?? value?.customer?.fullName ?? '',
+  date: value?.date ?? value?.createdAt?.split('T')[0] ?? new Date().toISOString().split('T')[0],
+  items: Array.isArray(value?.items) ? value.items.map((item: any) => ({
+    productId: item?.productId ?? item?.product?.id ?? '',
+    productName: item?.productName ?? item?.product?.name ?? '',
+    sku: item?.sku ?? item?.product?.sku ?? '',
+    quantity: Number(item?.quantity ?? 1),
+    unitPrice: Number(item?.unitPrice ?? item?.price ?? 0),
+    discount: Number(item?.discount ?? 0),
+    total: Number(item?.total ?? (Number(item?.quantity ?? 1) * Number(item?.unitPrice ?? item?.price ?? 0))),
+  })) : [],
+  subtotal: Number(value?.subtotal ?? value?.amount ?? 0),
+  discountAmount: Number(value?.discountAmount ?? 0),
+  taxRate: Number(value?.taxRate ?? 14),
+  taxAmount: Number(value?.taxAmount ?? 0),
+  total: Number(value?.total ?? value?.amount ?? 0),
+  paymentMethod: normalizePaymentMethod(value?.paymentMethod),
+  status: normalizeStatus(value?.status),
+  notes: value?.notes ?? '',
+});
+
+const normalizeCustomer = (value: any): Customer => ({
+  id: value?.id ?? value?.customerId ?? '',
+  name: value?.name ?? value?.fullName ?? '',
+  phone: value?.phone ?? '',
+  email: value?.email ?? '',
+  address: value?.address ?? '',
+  notes: value?.notes ?? '',
+  balance: Number(value?.balance ?? value?.credit ?? 0),
+  totalPurchases: Number(value?.totalPurchases ?? value?.totalSales ?? 0),
+  joinDate: value?.joinDate ?? value?.createdAt?.split('T')[0] ?? new Date().toISOString().split('T')[0],
+});
+
+const normalizeProduct = (value: any): Product => ({
+  id: value?.id ?? value?.productId ?? '',
+  name: value?.name ?? '',
+  sku: value?.sku ?? '',
+  barcode: value?.barcode ?? '',
+  brand: value?.brand ?? '',
+  category: value?.category ?? '',
+  costPrice: Number(value?.costPrice ?? value?.cost ?? 0),
+  sellingPrice: Number(value?.sellingPrice ?? value?.price ?? 0),
+  quantity: Number(value?.quantity ?? value?.stock ?? 0),
+  reorderLevel: Number(value?.reorderLevel ?? 0),
+});
+
 export function SalesPage() {
   const [sales, setSales] = useState<Sale[]>(SALES);
+  const [customers, setCustomers] = useState<Customer[]>(CUSTOMERS);
+  const [products, setProducts] = useState<Product[]>(PRODUCTS);
   const [tab, setTab] = useState<'invoice' | 'order' | 'quotation'>('invoice');
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -22,11 +108,43 @@ export function SalesPage() {
   const [createType, setCreateType] = useState<'invoice' | 'order' | 'quotation'>('invoice');
   const [form, setForm] = useState({ customerId: '', notes: '', paymentMethod: 'cash' as Sale['paymentMethod'], taxRate: 14, discountAmount: 0 });
   const [items, setItems] = useState<SaleItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [apiSales, apiCustomers, apiProducts] = await Promise.all([
+          getSales(),
+          getCustomers(),
+          getProducts(),
+        ]);
+        if (!cancelled) {
+          setSales(apiSales.map(normalizeSale));
+          setCustomers(apiCustomers.map(normalizeCustomer));
+          setProducts(apiProducts.map(normalizeProduct));
+          setStatusMessage('');
+        }
+      } catch {
+        if (!cancelled) {
+          setSales(SALES);
+          setCustomers(CUSTOMERS);
+          setProducts(PRODUCTS);
+          setStatusMessage('تم استخدام البيانات المحلية بسبب عدم توفر الخادم حالياً.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const filtered = sales.filter(s => s.type === tab && (!search || s.customerName.includes(search) || s.id.includes(search)));
 
   const addItem = () => {
-    const p = PRODUCTS[0];
+    const p = products[0] ?? PRODUCTS[0];
     setItems(prev => [...prev, { productId: p.id, productName: p.name, sku: p.sku, quantity: 1, unitPrice: p.sellingPrice, discount: 0, total: p.sellingPrice }]);
   };
 
@@ -35,7 +153,7 @@ export function SalesPage() {
       const next = [...prev];
       const item = { ...next[i], [field]: value };
       if (field === 'productId') {
-        const p = PRODUCTS.find(p => p.id === value);
+        const p = products.find(p => p.id === value) ?? PRODUCTS.find(p => p.id === value);
         if (p) { item.productName = p.name; item.sku = p.sku; item.unitPrice = p.sellingPrice; }
       }
       item.total = item.quantity * item.unitPrice * (1 - item.discount / 100);
@@ -50,17 +168,24 @@ export function SalesPage() {
   const taxAmount = ((subtotal - form.discountAmount) * form.taxRate) / 100;
   const total = subtotal - form.discountAmount + taxAmount;
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!form.customerId || items.length === 0) return;
-    const customer = CUSTOMERS.find(c => c.id === form.customerId);
+    const customer = customers.find(c => c.id === form.customerId);
     const prefix = createType === 'invoice' ? 'INV' : createType === 'order' ? 'ORD' : 'QT';
-    const newSale: Sale = {
-      id: `${prefix}-2026-${String(saleCounter++).padStart(3, '0')}`,
+    const payload = {
       type: createType,
       customerId: form.customerId,
       customerName: customer?.name || '',
       date: new Date().toISOString().split('T')[0],
-      items,
+      items: items.map(i => ({
+        productId: i.productId,
+        productName: i.productName,
+        sku: i.sku,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        discount: i.discount,
+        total: i.total,
+      })),
       subtotal,
       discountAmount: form.discountAmount,
       taxRate: form.taxRate,
@@ -70,10 +195,37 @@ export function SalesPage() {
       status: createType === 'invoice' ? 'paid' : createType === 'order' ? 'pending' : 'draft',
       notes: form.notes,
     };
-    setSales(prev => [newSale, ...prev]);
-    setShowCreate(false);
-    setItems([]);
-    setForm({ customerId: '', notes: '', paymentMethod: 'cash', taxRate: 14, discountAmount: 0 });
+    try {
+      const created = await createSale(payload);
+      const newSale = normalizeSale(created ?? payload);
+      setSales(prev => [newSale, ...prev]);
+      setShowCreate(false);
+      setItems([]);
+      setForm({ customerId: '', notes: '', paymentMethod: 'cash', taxRate: 14, discountAmount: 0 });
+      setStatusMessage('تم إنشاء السجل بنجاح.');
+    } catch {
+      const fallbackSale: Sale = {
+        id: `${prefix}-2026-${String(saleCounter++).padStart(3, '0')}`,
+        type: createType,
+        customerId: form.customerId,
+        customerName: customer?.name || '',
+        date: new Date().toISOString().split('T')[0],
+        items,
+        subtotal,
+        discountAmount: form.discountAmount,
+        taxRate: form.taxRate,
+        taxAmount,
+        total,
+        paymentMethod: form.paymentMethod,
+        status: createType === 'invoice' ? 'paid' : createType === 'order' ? 'pending' : 'draft',
+        notes: form.notes,
+      };
+      setSales(prev => [fallbackSale, ...prev]);
+      setShowCreate(false);
+      setItems([]);
+      setForm({ customerId: '', notes: '', paymentMethod: 'cash', taxRate: 14, discountAmount: 0 });
+      setStatusMessage('تم حفظ السجل محلياً لأن الخادم غير متاح حالياً.');
+    }
   };
 
   const handlePrint = (sale: Sale) => {
@@ -142,6 +294,9 @@ export function SalesPage() {
 
   return (
     <div>
+      {statusMessage && (
+        <div className="mb-4 rounded-xl border border-purple-100 bg-purple-50 px-4 py-2 text-sm text-purple-700">{statusMessage}</div>
+      )}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">المبيعات</h1>
@@ -259,7 +414,7 @@ export function SalesPage() {
                   <label className="block text-sm font-semibold text-gray-600 mb-1.5">العميل *</label>
                   <select value={form.customerId} onChange={e => setForm(f => ({ ...f, customerId: e.target.value }))} className={inputCls}>
                     <option value="">اختر عميل</option>
-                    {CUSTOMERS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -291,7 +446,7 @@ export function SalesPage() {
                           onChange={e => updateItem(i, 'productId', e.target.value)}
                           className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#7C3AED]"
                         >
-                          {PRODUCTS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                         </select>
                         <input
                           type="number" value={item.quantity} min={1}
